@@ -1,0 +1,85 @@
+name: Sync Upstream Forge Docs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  sync-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Fork's Main Branch
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.LINGFENGS_PAT }}
+          ref: "main"
+
+      - name: Sync Docs from Upstream
+        run: |
+          UPSTREAM_REPO='MinecraftForge/Documentation'
+          BRANCH_PATTERN='1.*'
+          SOURCE_DOCS_DIR='docs'
+          DEST_DIR_PREFIX='upstream_docs'
+
+          UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}.git"
+
+          echo "Fetching branches from upstream: ${UPSTREAM_REPO}"
+
+          branches=$(git ls-remote --heads "$UPSTREAM_URL" "refs/heads/${BRANCH_PATTERN}" | awk '{print $2}' | sed 's|refs/heads/||')
+
+          if [ -z "$branches" ]; then
+            echo "No branches matching pattern '${BRANCH_PATTERN}' found in upstream repository."
+            exit 0
+          fi
+
+          echo "Found matching branches:"
+          echo "$branches"
+
+          for branch in $branches; do
+            echo ""
+            echo "--- Processing branch: $branch ---"
+
+            TEMP_DIR="temp_clone_$$"
+            mkdir "$TEMP_DIR"
+            cd "$TEMP_DIR"
+
+            git init
+            git remote add origin "$UPSTREAM_URL"
+            git config core.sparseCheckout true
+            echo "${SOURCE_DOCS_DIR}/*" > .git/info/sparse-checkout
+            
+            echo "Fetching only '${SOURCE_DOCS_DIR}' from branch '${branch}'..."
+            git pull --depth=1 origin "$branch"
+
+            cd ..
+
+            DEST_PATH="${DEST_DIR_PREFIX}/${branch}"
+            
+            echo "Copying docs to ${DEST_PATH}"
+            rm -rf "$DEST_PATH"
+            mkdir -p "$DEST_PATH"
+
+            if [ -d "${TEMP_DIR}/${SOURCE_DOCS_DIR}" ]; then
+              cp -r "${TEMP_DIR}/${SOURCE_DOCS_DIR}/." "$DEST_PATH/"
+            else
+              echo "Warning: Source directory '${SOURCE_DOCS_DIR}' not found in branch '${branch}'. Skipping."
+            fi
+
+            rm -rf "$TEMP_DIR"
+          done
+
+      - name: Commit and Push Changes
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "Changes detected. Committing and pushing..."
+            git add .
+            git commit -m "docs: Sync 1.x documentation from upstream"
+            git push
+          else
+            echo "No changes to commit."
+          fi
